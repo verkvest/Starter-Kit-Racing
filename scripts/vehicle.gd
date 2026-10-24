@@ -42,6 +42,12 @@ var prev_position: Vector3
 
 var calculated_lean: float
 
+# Steering and throttle are sampled from the player by default. The race
+# can drive them directly for the rival and for scripted shots.
+var read_player_input := true
+var steer_input := 0.0
+var throttle_input := 0.0
+
 # Public Functions
 
 func get_vehicle_position() -> Vector3: return vehicle_model.global_position
@@ -112,11 +118,57 @@ func _physics_process(delta):
 
 func handle_input(delta):
 
-	if raycast.is_colliding():
-		input.x = Input.get_axis("left", "right")
-		input.z = Input.get_axis("back", "forward")
+	if read_player_input:
+		steer_input = Input.get_axis("left", "right")
+		throttle_input = Input.get_axis("back", "forward")
 
-	sphere.angular_velocity += vehicle_model.get_global_transform().basis.x * (linear_speed * 100) * delta
+	if raycast.is_colliding():
+		input.x = steer_input
+		input.z = throttle_input
+
+	sphere.angular_velocity += vehicle_model.global_transform.basis.x * (linear_speed * 100.0) * delta
+
+# Drop the car at a world position, facing yaw (local +Z is forward).
+func relocate(world_pos: Vector3, yaw: float) -> void:
+	global_position = world_pos
+	rotation = Vector3.ZERO
+	sphere.position = Vector3(0, 0.85, 0)
+	sphere.linear_velocity = Vector3.ZERO
+	sphere.angular_velocity = Vector3.ZERO
+	sphere.sleeping = false
+	vehicle_model.position = sphere.position - Vector3(0, 0.65, 0)
+	vehicle_model.rotation = Vector3(0, yaw, 0)
+	linear_speed = 0.0
+	angular_speed = 0.0
+	acceleration = 0.0
+	input = Vector3.ZERO
+	prev_position = vehicle_model.position
+
+# Swap the visible model. Wheel and body names match across the kit trucks.
+func apply_model(packed: PackedScene) -> void:
+	var old := vehicle_model.get_node_or_null("Model")
+	var inst := packed.instantiate()
+	inst.name = "Model"
+	if old:
+		old.name = "ModelOld"
+	vehicle_model.add_child(inst)
+	vehicle_model.move_child(inst, 0)
+	if old:
+		old.free()
+	vehicle_body = _find_named(inst, "body")
+	wheel_fl = _find_named(inst, "wheel-front-left")
+	wheel_fr = _find_named(inst, "wheel-front-right")
+	wheel_bl = _find_named(inst, "wheel-back-left")
+	wheel_br = _find_named(inst, "wheel-back-right")
+
+func _find_named(root: Node, node_name: String) -> Node:
+	if root.name == node_name:
+		return root
+	for child in root.get_children():
+		var found := _find_named(child, node_name)
+		if found:
+			return found
+	return null
 
 func effect_body(delta):
 	

@@ -1,0 +1,217 @@
+# Sign and upload Veldash to TestFlight.
+# Skips cleanly when the App Store Connect API secrets are absent (forks).
+#
+# Secrets (never commit them):
+#   APPSTORE_API_KEY_P8       AuthKey contents, raw PEM or base64
+#   APPSTORE_API_KEY_ID
+#   APPSTORE_API_ISSUER_ID
+# The key needs Admin or App Manager so Xcode can cloud-sign.
+# The App Store Connect *app record* must exist before the first upload.
+# This workflow registers the bundle id; it cannot create that app record.
+
+name: ios-testflight
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, "cursor/**"]
+    tags: ["testflight-*"]
+
+concurrency:
+  group: ios-testflight-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  TEAM_ID: 38PT254HDZ
+  BUNDLE_ID: es.verkvest.veldash
+  APP_VERSION: "0.1.0"
+  GODOT_VERSION: "4.7.2"
+
+jobs:
+  testflight:
+    runs-on: macos-15
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    env:
+      HAS_KEY: ${{ secrets.APPSTORE_API_KEY_P8 != '' && secrets.APPSTORE_API_KEY_ID != '' && secrets.APPSTORE_API_ISSUER_ID != '' }}
+    steps:
+      - name: Check secrets
+        run: |
+          if [ "$HAS_KEY" != "true" ]; then
+            echo "::notice::App Store Connect API key secrets are not set – skipping signing and upload."
+          fi
+
+      - uses: actions/checkout@v4
+        if: env.HAS_KEY == 'true'
+
+      - name: Select Xcode 26
+        if: env.HAS_KEY == 'true'
+        run: |
+          X=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | grep -vi beta | sort -V | tail -1)
+          if [ -z "$X" ]; then
+            X=$(ls -d /Applications/Xcode*.app 2>/dev/null | grep -vi beta | sort -V | tail -1)
+          fi
+          [ -n "$X" ] && sudo xcode-select -s "$X"
+          xcodebuild -version
+
+      - name: Install Godot and export templates
+        if: env.HAS_KEY == 'true'
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP"
+          curl -fsSL -o godot.zip "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_macos.universal.zip"
+          unzip -q godot.zip
+          APP=$(find "$RUNNER_TEMP" -type d -name 'Godot.app' | head -1)
+          xattr -dr com.apple.quarantine "$APP" || true
+          codesign --force --deep --sign - "$APP"
+          GODOT="$APP/Contents/MacOS/Godot"
+          chmod +x "$GODOT"
+          echo "GODOT=$GODOT" >> "$GITHUB_ENV"
+          "$GODOT" --version
+          curl -fsSL -o templates.tpz "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_export_templates.tpz"
+          rm -rf tpl && mkdir tpl && unzip -q templates.tpz -d tpl
+          DEST="$HOME/Library/Application Support/Godot/export_templates/${GODOT_VERSION}.stable"
+          mkdir -p "$DEST"
+          cp -R tpl/templates/* "$DEST/"
+          ls "$DEST" | head
+
+      - name: Install API key
+        if: env.HAS_KEY == 'true'
+        env:
+          APPSTORE_API_KEY_P8: ${{ secrets.APPSTORE_API_KEY_P8 }}
+          APPSTORE_API_KEY_ID: ${{ secrets.APPSTORE_API_KEY_ID }}
+        run: |
+          mkdir -p ~/.appstoreconnect/private_keys
+          KEYFILE=~/.appstoreconnect/private_keys/AuthKey_${APPSTORE_API_KEY_ID}.p8
+          if printf '%s' "$APPSTORE_API_KEY_P8" | grep -q "BEGIN PRIVATE KEY"; then
+            printf '%s\n' "$APPSTORE_API_KEY_P8" > "$KEYFILE"
+          else
+            printf '%s' "$APPSTORE_API_KEY_P8" | base64 --decode > "$KEYFILE"
+          fi
+          chmod 600 "$KEYFILE"
+          echo "KEYFILE=$KEYFILE" >> "$GITHUB_ENV"
+
+      - name: Register bundle id
+        if: env.HAS_KEY == 'true'
+        env:
+          APPSTORE_API_KEY_ID: ${{ secrets.APPSTORE_API_KEY_ID }}
+          APPSTORE_API_ISSUER_ID: ${{ secrets.APPSTORE_API_ISSUER_ID }}
+          APPSTORE_API_KEY_PATH: ${{ env.KEYFILE }}
+          BUNDLE_ID: es.verkvest.veldash
+          APP_NAME: Veldash
+        run: |
+          python3 -m venv "$RUNNER_TEMP/asc-py"
+          "$RUNNER_TEMP/asc-py/bin/pip" install 'PyJWT[crypto]' cryptography
+          "$RUNNER_TEMP/asc-py/bin/python" tools/asc_ensure_bundle.py
+
+      - name: Set build number and export the Xcode project
+        if: env.HAS_KEY == 'true'
+        run: |
+          set -euo pipefail
+          python3 - << PY
+          from pathlib import Path
+          n = "${{ github.run_number }}"
+          path = Path("export_presets.cfg")
+          text = path.read_text()
+          # Only the iOS preset uses application/version as CFBundleVersion.
+          lines = []
+          section = ""
+          for line in text.splitlines():
+              if line.startswith("[preset.") and line.endswith("]"):
+                  section = line
+              if section == "[preset.0.options]" and line.startswith("application/version="):
+                  line = f'application/version="{n}"'
+              lines.append(line)
+          path.write_text("\n".join(lines) + "\n")
+          PY
+          mkdir -p build/ios
+          "$GODOT" --headless --path "$PWD" --import --quit || true
+          "$GODOT" --headless --path "$PWD" --export-release "iOS" "$PWD/build/ios/Veldash.ipa"
+          find build/ios -maxdepth 3 -type d | head -40
+
+      - name: Stamp Info.plist
+        if: env.HAS_KEY == 'true'
+        run: |
+          set -euo pipefail
+          while IFS= read -r plist; do
+            /usr/libexec/PlistBuddy -c "Delete :ITSAppUsesNonExemptEncryption" "$plist" 2>/dev/null || true
+            /usr/libexec/PlistBuddy -c "Add :ITSAppUsesNonExemptEncryption bool false" "$plist"
+            /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${{ github.run_number }}" "$plist" || \
+              /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string ${{ github.run_number }}" "$plist"
+            /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${APP_VERSION}" "$plist" || \
+              /usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string ${APP_VERSION}" "$plist"
+            echo "stamped $plist"
+          done < <(find build/ios -name Info.plist)
+
+      - name: Archive (unsigned)
+        if: env.HAS_KEY == 'true'
+        env:
+          APPSTORE_API_KEY_ID: ${{ secrets.APPSTORE_API_KEY_ID }}
+          APPSTORE_API_ISSUER_ID: ${{ secrets.APPSTORE_API_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          xcodebuild -project build/ios/Veldash.xcodeproj -list
+          xcodebuild -project build/ios/Veldash.xcodeproj -scheme Veldash -configuration Release \
+            -destination 'generic/platform=iOS' -archivePath "$RUNNER_TEMP/Veldash.xcarchive" \
+            -allowProvisioningUpdates -authenticationKeyPath "$KEYFILE" \
+            -authenticationKeyID "$APPSTORE_API_KEY_ID" -authenticationKeyIssuerID "$APPSTORE_API_ISSUER_ID" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            SKIP_INSTALL=NO INSTALL_PATH=/Applications \
+            archive | tee "$RUNNER_TEMP/archive.log" | tail -80
+          test ${PIPESTATUS[0]} -eq 0
+          find "$RUNNER_TEMP/Veldash.xcarchive" -maxdepth 3 | head -30
+
+      - name: Export and upload to TestFlight
+        if: env.HAS_KEY == 'true'
+        env:
+          APPSTORE_API_KEY_ID: ${{ secrets.APPSTORE_API_KEY_ID }}
+          APPSTORE_API_ISSUER_ID: ${{ secrets.APPSTORE_API_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/ExportOptions.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>destination</key><string>export</string>
+            <key>teamID</key><string>${TEAM_ID}</string>
+            <key>signingStyle</key><string>automatic</string>
+            <key>manageAppVersionAndBuildNumber</key><false/>
+          </dict></plist>
+          PLIST
+          xcodebuild -exportArchive -archivePath "$RUNNER_TEMP/Veldash.xcarchive" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" -exportPath "$RUNNER_TEMP/export" \
+            -allowProvisioningUpdates -authenticationKeyPath "$KEYFILE" \
+            -authenticationKeyID "$APPSTORE_API_KEY_ID" -authenticationKeyIssuerID "$APPSTORE_API_ISSUER_ID" \
+            | tee "$RUNNER_TEMP/export.log" | tail -40
+          test ${PIPESTATUS[0]} -eq 0
+          ls -la "$RUNNER_TEMP/export"
+          set +e
+          xcrun altool --upload-app -t ios -f "$RUNNER_TEMP"/export/*.ipa \
+            --apiKey "$APPSTORE_API_KEY_ID" --apiIssuer "$APPSTORE_API_ISSUER_ID" \
+            2>&1 | tee "$RUNNER_TEMP/upload.log"
+          set -e
+          if grep -E -q "ERROR|errors:" "$RUNNER_TEMP/upload.log"; then
+            if grep -E -q "Cannot determine the Apple ID|No suitable application records|ITMS-90186|does not exist|Unable to find|No application records|bundle identifier" "$RUNNER_TEMP/upload.log"; then
+              echo "::error::No App Store Connect app record for ${BUNDLE_ID}. Create it manually: App Store Connect → Apps → + → New App, name Veldash, bundle ID ${BUNDLE_ID}, then re-run this workflow. The bundle id is registered by this workflow; the app record cannot be created via the API."
+            else
+              echo "::error::TestFlight upload failed. See the upload log."
+            fi
+            exit 1
+          fi
+          echo "::notice::Uploaded ${BUNDLE_ID} ${APP_VERSION} (${{ github.run_number }}) to App Store Connect"
+
+      - uses: actions/upload-artifact@v4
+        if: always() && env.HAS_KEY == 'true'
+        with:
+          name: testflight-logs
+          path: |
+            ${{ runner.temp }}/archive.log
+            ${{ runner.temp }}/export.log
+            ${{ runner.temp }}/upload.log
+          if-no-files-found: ignore
+
+      - name: Cleanup key
+        if: always()
+        run: rm -rf ~/.appstoreconnect/private_keys
