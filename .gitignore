@@ -17,3 +17,11 @@ data_*/
 mono_crash.*.json
 
 .vscode/
+
+# Export output and signing material
+build/
+*.keystore
+*.jks
+*.apk
+*.aab
+*.ipa

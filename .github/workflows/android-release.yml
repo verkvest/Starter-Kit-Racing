@@ -1,0 +1,194 @@
+# Android release for Veldash.
+# Exports a release AAB and APK when keystore secrets are present.
+# Otherwise exports a debug-signed APK. targetSdk is 36.
+#
+# Secrets (optional):
+#   ANDROID_KEYSTORE_B64
+#   ANDROID_KEYSTORE_PASSWORD
+#   ANDROID_KEY_ALIAS
+
+name: android-release
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, "cursor/**"]
+    tags: ["testflight-*"]
+
+concurrency:
+  group: android-release-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GODOT_VERSION: "4.7.2"
+
+jobs:
+  self-test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Godot
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y unzip
+          curl -fsSL -o /tmp/godot.zip "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
+          unzip -q /tmp/godot.zip -d /tmp/godot
+          GODOT=$(find /tmp/godot -type f -name 'Godot*' | head -1)
+          chmod +x "$GODOT"
+          echo "GODOT=$GODOT" >> "$GITHUB_ENV"
+          "$GODOT" --version
+      - name: Headless self-test
+        run: |
+          set -euo pipefail
+          "$GODOT" --headless --path "$PWD" --import --quit || true
+          "$GODOT" --headless --path "$PWD" -- --self-test
+
+  screenshots:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Godot and a software GL stack
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y unzip xvfb libx11-6 libxcursor1 libxinerama1 libxext6 libxrandr2 libxi6 libgl1 libfontconfig1 mesa-vulkan-drivers
+          curl -fsSL -o /tmp/godot.zip "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
+          unzip -q /tmp/godot.zip -d /tmp/godot
+          GODOT=$(find /tmp/godot -type f -name 'Godot*' | head -1)
+          chmod +x "$GODOT"
+          echo "GODOT=$GODOT" >> "$GITHUB_ENV"
+      - name: Capture menu and gameplay
+        run: |
+          set -euo pipefail
+          mkdir -p screenshots
+          "$GODOT" --headless --path "$PWD" --import --quit || true
+          export DISPLAY=:99
+          Xvfb :99 -screen 0 2560x1440x24 &
+          sleep 1
+          "$GODOT" --display-driver x11 --rendering-driver opengl3 --rendering-method gl_compatibility \
+            --path "$PWD" -- --shot menu --shot-dir "$PWD/screenshots"
+          "$GODOT" --display-driver x11 --rendering-driver opengl3 --rendering-method gl_compatibility \
+            --path "$PWD" -- --shot gameplay --shot-dir "$PWD/screenshots"
+          ls -la screenshots
+          test -s screenshots/menu.png
+          test -s screenshots/gameplay.png
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: phone-screenshots
+          path: |
+            screenshots/menu.png
+            screenshots/gameplay.png
+          if-no-files-found: ignore
+
+  android:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install JDK, Godot, and Android SDK 36
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y unzip openjdk-17-jdk
+          echo "JAVA_HOME=$(dirname $(dirname $(readlink -f $(which javac))))" >> "$GITHUB_ENV"
+          curl -fsSL -o /tmp/godot.zip "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
+          unzip -q /tmp/godot.zip -d /tmp/godot
+          GODOT=$(find /tmp/godot -type f -name 'Godot*' | head -1)
+          chmod +x "$GODOT"
+          echo "GODOT=$GODOT" >> "$GITHUB_ENV"
+          curl -fsSL -o /tmp/templates.tpz "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_export_templates.tpz"
+          rm -rf /tmp/tpl && mkdir /tmp/tpl && unzip -q /tmp/templates.tpz -d /tmp/tpl
+          DEST="$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable"
+          mkdir -p "$DEST"
+          cp -R /tmp/tpl/templates/* "$DEST/"
+          SDK="$HOME/android-sdk"
+          mkdir -p "$SDK/cmdline-tools"
+          curl -fsSL -o /tmp/cmdtools.zip "https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip"
+          unzip -q /tmp/cmdtools.zip -d /tmp/cmdtools
+          rm -rf "$SDK/cmdline-tools/latest"
+          mv /tmp/cmdtools/cmdline-tools "$SDK/cmdline-tools/latest"
+          yes | "$SDK/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$SDK" --licenses >/dev/null
+          "$SDK/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$SDK" "platforms;android-36" "build-tools;36.0.0" "platform-tools"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+
+      - name: Editor settings and debug keystore
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.local/share/godot"
+          keytool -genkeypair -keystore "$HOME/.local/share/godot/debug.keystore" \
+            -storepass android -alias androiddebugkey -keypass android \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -dname "cn=Godot, ou=Godot Engine, o=Stichting Godot, c=NL"
+          export GOST_DEBUG_KEYSTORE="$HOME/.local/share/godot/debug.keystore"
+          export GODOT_DEBUG_KEYSTORE="$HOME/.local/share/godot/debug.keystore"
+          python3 tools/patch_editor_settings.py
+          # Import once so class names and editor settings settle.
+          "$GODOT" --headless --path "$PWD" --import --quit || "$GODOT" --headless --editor --path "$PWD" --quit || true
+          python3 tools/patch_editor_settings.py
+
+      - name: Bump version code
+        run: |
+          python3 - << PY
+          from pathlib import Path
+          n = "${{ github.run_number }}"
+          path = Path("export_presets.cfg")
+          lines = []
+          for line in path.read_text().splitlines():
+              if line.startswith("version/code="):
+                  line = f"version/code={n}"
+              lines.append(line)
+          path.write_text("\n".join(lines) + "\n")
+          PY
+
+      - name: Export debug APK or signed release
+        env:
+          ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          set -euo pipefail
+          mkdir -p build/android
+          SIGNED=0
+          if [ -n "${ANDROID_KEYSTORE_B64:-}" ] && [ -n "${ANDROID_KEYSTORE_PASSWORD:-}" ] && [ -n "${ANDROID_KEY_ALIAS:-}" ]; then
+            KS="$RUNNER_TEMP/release.keystore"
+            if printf '%s' "$ANDROID_KEYSTORE_B64" | grep -q "BEGIN "; then
+              printf '%s\n' "$ANDROID_KEYSTORE_B64" > "$KS"
+            else
+              printf '%s' "$ANDROID_KEYSTORE_B64" | base64 --decode > "$KS"
+            fi
+            chmod 600 "$KS"
+            export GODOT_ANDROID_KEYSTORE_RELEASE_PATH="$KS"
+            export GODOT_ANDROID_KEYSTORE_RELEASE_USER="$ANDROID_KEY_ALIAS"
+            export GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD="$ANDROID_KEYSTORE_PASSWORD"
+            SIGNED=1
+          fi
+          if [ "$SIGNED" = "1" ]; then
+            "$GODOT" --headless --path "$PWD" --export-release "Android APK" "$PWD/build/android/Veldash.apk"
+            "$GODOT" --headless --path "$PWD" --export-release "Android AAB" "$PWD/build/android/Veldash.aab"
+          else
+            echo "Keystore secrets absent; exporting a debug-signed APK."
+            "$GODOT" --headless --path "$PWD" --export-debug "Android APK" "$PWD/build/android/Veldash-debug.apk"
+          fi
+          ls -la build/android
+          APK=$(find build/android -name '*.apk' | head -1)
+          AAPT=$(find "$ANDROID_SDK_ROOT/build-tools" -name aapt -o -name aapt2 | head -1)
+          echo "checking $APK with $AAPT"
+          if [ -n "$AAPT" ] && [[ "$AAPT" == *aapt2 ]]; then
+            AAPT=$(find "$ANDROID_SDK_ROOT/build-tools" -name aapt | head -1)
+          fi
+          "$AAPT" dump badging "$APK" | tee /tmp/badging.txt
+          grep -q "targetSdkVersion:'36'" /tmp/badging.txt
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: android-packages
+          path: |
+            build/android/*.apk
+            build/android/*.aab
+          if-no-files-found: ignore

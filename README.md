@@ -1,66 +1,30 @@
-<p align="center"><img src="icon.png"/></p>
+<p align="center"><img src="icon.png" width="128"/></p>
 
-# Starter Kit Racing
+# Veldash
 
-This package includes a basic template for a racing game in Godot 4.6. Includes features like;
+A pocket racing game for phones, built with Godot 4.7 from Kenney's Starter Kit Racing. Four circuits, a lap timer, saved best times, and one rival.
 
-- Arcade-like vehicle controls
-- Smoke effect
-- GridMap based track creation
-- 3D Models & sounds _(CC0 licensed)_
+Bundle id (iOS and Android): `es.verkvest.veldash`
 
-### Screenshot
+### Screenshots
 
-<p align="center"><img src="screenshots/screenshot.png"/></p>
+<p align="center"><img src="screenshots/menu.png" width="420"/> <img src="screenshots/gameplay.png" width="420"/></p>
 
-### Controls
+### Play
 
-| Key | Command |
-| --- | --- |
-| <kbd>W</kbd> | Accelerate/brake |
-| <kbd>S</kbd> | Brake/reverse |
-| <kbd>A</kbd> <kbd>D</kbd> | Steering |
+Landscape. On a phone, steer with the left and right buttons and use the gas and brake buttons together. Tilt steering is optional (there is an invert switch, because devices disagree about which way is left). Keyboard still works: W accelerate, S brake, A D steer, Esc pause.
 
-### Instructions
+Best race time and best lap are stored on the device per circuit.
 
-#### 1. How to adjust the track?
+### Tracks
 
-Select the 'GridMap' node and place pre-made tiles in the world.
+Circuits are built in code from the kit's GridMap pieces (`track-straight`, `track-corner`, `track-finish`, plus trees, tents, and a ramp off the racing line). The driving surface is a ground plane. Extra invisible walls keep the cars on the asphalt.
 
-#### 2. How to change the car model?
+### Credits
 
-Choose one of the included vehicles in the project (for example 'vehicle-truck-yellow.glb') and drag it into the project as a child of 'Container'. Then change the name to 'Model'.
+See `THIRD_PARTY_LICENSES.md` and the in-game Credits screen. Code is MIT (Kenney). Models and sounds are CC0. The skid sound is by Landeplage (CC0). Godot Engine is MIT. The Veldash icon and splash are original.
 
-#### 3. How to add custom car models?
+### Export
 
-Follow the same steps as seen above but make sure your model has the following children;
-
-- `body` The body of the vehicle
-
-- `wheel-front-left` The front left wheel of the vehicle
-
-- `wheel-front-right` The front right wheel of the vehicle
-
-- `wheel-back-left` The back left wheel of the vehicle
-
-- `wheel-back-right` The back right wheel of the vehicle
-
-#### 4. How to change from a car to a motorcycle?
-
-Remove the 'Vehicle' node from the main scene. Find the 'vehicle-motorcycle.tscn' scene and place it in your main scene, make sure to adjust the 'View' node to target the new vehicle.
-
-### License
-
-MIT License
-
-Copyright (c) 2026 Kenney
-
-Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-
-Assets included in this package (2D sprites, 3D models and sound effects) are [CC0 licensed](https://creativecommons.org/publicdomain/zero/1.0/)
-
-The skid sound effect was made by [Landeplage](https://github.com/Landeplage) and is also CC0 licensed
+- iOS: GitHub Actions workflow `ios-testflight` (Godot exports an Xcode project, then `xcodebuild` archives and uploads to TestFlight).
+- Android: workflow `android-release` (release AAB and APK when keystore secrets are present, otherwise a debug-signed APK). Target SDK 36.
