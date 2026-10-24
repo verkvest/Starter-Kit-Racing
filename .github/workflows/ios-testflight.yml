@@ -96,8 +96,9 @@ jobs:
           BUNDLE_ID: es.verkvest.veldash
           APP_NAME: Veldash
         run: |
-          python3 -m pip install --user 'PyJWT[crypto]' cryptography
-          python3 tools/asc_ensure_bundle.py
+          python3 -m venv "$RUNNER_TEMP/asc-py"
+          "$RUNNER_TEMP/asc-py/bin/pip" install 'PyJWT[crypto]' cryptography
+          "$RUNNER_TEMP/asc-py/bin/python" tools/asc_ensure_bundle.py
 
       - name: Set build number and export the Xcode project
         if: env.HAS_KEY == 'true'

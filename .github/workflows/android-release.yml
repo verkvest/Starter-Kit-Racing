@@ -111,7 +111,11 @@ jobs:
           unzip -q /tmp/cmdtools.zip -d /tmp/cmdtools
           rm -rf "$SDK/cmdline-tools/latest"
           mv /tmp/cmdtools/cmdline-tools "$SDK/cmdline-tools/latest"
-          yes | "$SDK/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$SDK" --licenses >/dev/null
+          # sdkmanager closes stdin once the licenses are accepted, so yes exits
+          # with SIGPIPE. Ignore that under pipefail and keep going.
+          set +o pipefail
+          yes | "$SDK/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$SDK" --licenses >/dev/null || true
+          set -o pipefail
           "$SDK/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$SDK" "platforms;android-36" "build-tools;36.0.0" "platform-tools"
           echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
           echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
