@@ -62,8 +62,13 @@ jobs:
           cd "$RUNNER_TEMP"
           curl -fsSL -o godot.zip "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_macos.universal.zip"
           unzip -q godot.zip
-          GODOT=$(find . -type f -path "*/MacOS/Godot" | head -1)
+          APP=$(find "$RUNNER_TEMP" -type d -name 'Godot.app' | head -1)
+          xattr -dr com.apple.quarantine "$APP" || true
+          codesign --force --deep --sign - "$APP"
+          GODOT="$APP/Contents/MacOS/Godot"
+          chmod +x "$GODOT"
           echo "GODOT=$GODOT" >> "$GITHUB_ENV"
+          "$GODOT" --version
           curl -fsSL -o templates.tpz "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_export_templates.tpz"
           rm -rf tpl && mkdir tpl && unzip -q templates.tpz -d tpl
           DEST="$HOME/Library/Application Support/Godot/export_templates/${GODOT_VERSION}.stable"

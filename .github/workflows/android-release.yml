@@ -128,9 +128,25 @@ jobs:
             -storepass android -alias androiddebugkey -keypass android \
             -keyalg RSA -keysize 2048 -validity 10000 \
             -dname "cn=Godot, ou=Godot Engine, o=Stichting Godot, c=NL"
-          export GOST_DEBUG_KEYSTORE="$HOME/.local/share/godot/debug.keystore"
           export GODOT_DEBUG_KEYSTORE="$HOME/.local/share/godot/debug.keystore"
           python3 tools/patch_editor_settings.py
+          # Gradle export looks for res://build/android-gradle/build/build.gradle
+          # and a sibling .build_version that matches the editor.
+          SRC="$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable/android_source.zip"
+          test -f "$SRC"
+          rm -rf build/android-gradle
+          mkdir -p build/android-gradle/build
+          unzip -q "$SRC" -d build/android-gradle/build
+          printf '%s\n' "${GODOT_VERSION}.stable" > build/android-gradle/.build_version
+          touch build/android-gradle/build/.gdignore
+          if [ -f build/android-gradle/build/gradlew ]; then
+            chmod +x build/android-gradle/build/gradlew
+          fi
+          if [ ! -f build/android-gradle/build/build.gradle ]; then
+            echo "android source layout:"
+            find build/android-gradle -maxdepth 3 \( -type d -o -name 'build.gradle*' \) | head -40
+            exit 1
+          fi
           # Import once so class names and editor settings settle.
           "$GODOT" --headless --path "$PWD" --import --quit || "$GODOT" --headless --editor --path "$PWD" --quit || true
           python3 tools/patch_editor_settings.py
